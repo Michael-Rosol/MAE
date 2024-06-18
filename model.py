@@ -73,8 +73,74 @@ class MaskedAutoEncoder(nn.Module):
             return x_masked, mask, ids_restore
 
 
-        def forward_encoder(self, x, mask_ratio):
+        def encoder(self, x, mask_ratio):
             x = self.pos_embed(x)
+            
+            B, _, _ = x.shape 
+
+            # add pos embed w/o cls token
+            x = x + self.pos_embed[:, 1:, :]
+            # masking: length -> length * mask_ratio
+            x, mask, ids_restore = self.random_masking(x, mask_ratio)
+            
+           
+            x = x + self.pos_embed
+
+            x, mask, restore_id = self.random_masking(x, mask_ratio)
+            
+            #cls tokenization: 
+            cls_tokens = self.cls_token.expand(B, -1, -1) 
+            x = torch.cat((cls_tokens,x), dim=1)
+
+            # apply Transformer blocks
+            for blk in self.blocks:
+                x = blk(x)
+                x = self.norm(x)
+
+            return x, mask, ids_restore
+
+        def decoder(self, x, ids_restore): 
+            x = self.decoder_embed(x) 
+
+            mask_tokens = self.mask_token.repeat(x.shape[0], ids_restore.shape[1] + 1 - x.shape[1], 1)
+            x_ = torch.cat([x[:, 1:, :], mask_tokens], dim=1)  # no cls token
+            x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]))  # unshuffle
+            x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
+
+            # add pos embed
+            x = x + self.decoder_pos_embed
+
+            # apply Transformer blocks
+            for blk in self.decoder_blocks:
+                x = blk(x)
+            x = self.decoder_norm(x)
+
+            # predictor projection
+            x = self.decoder_pred(x)
+
+            # remove cls token
+            x = x[:, 1:, :]
+
+            return x
+
+        def forward(self):
+            print("Hold")
+
+        def loss(self, imgs, pred, mask):
+
+            """
+            imgs: [N, 3, H, W]
+            pred: [N, L, patch*patch*3]
+            mask: [N, L], 0 is keep, 1 is remove, 
+            """
+
+            target = self.projection(imgs) 
+
+            loss = (pred - target) ** 2 
+            loss = loss.mean(dim=-1)
+
+            loss = (loss * mask).sum() / mask.sum() 
+            return loss 
 
         
 # Test the MaskedAutoEncoder class for patch embedding
