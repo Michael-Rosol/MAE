@@ -6,6 +6,7 @@ import torchvision
 from einops.layers.torch import Rearrange 
 
 from timm.models.vision_transformer import PatchEmbed, Block
+from util.pos_embed import get_2d_sincos_pos_embed
 
 class MaskedAutoEncoder(nn.Module):
     
@@ -36,14 +37,75 @@ class MaskedAutoEncoder(nn.Module):
             Block(decoder_emb_size, decoder_num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer)
             for i in range(decoder_depth)])
 
+        self.decoder_norm = norm_layer(decoder_emb_size)
         self.decoder_pred = nn.Linear(decoder_emb_size, patch_size**2 * in_chans, bias=True)
         self.norm_pix_loss = norm_pix_loss
-        # Projection: 
+        # # Projection: 
 
-        self.projection = nn.Sequential(
-            nn.Conv2d(in_channels=in_chans, out_channels=patch_size**2 * in_chans,kernel_size=patch_size, stride=patch_size),
-            Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_size, p2=patch_size)
-        )
+        # self.projection = nn.Sequential(
+        #     nn.Conv2d(in_channels=in_chans, out_channels=patch_size**2 * in_chans,kernel_size=patch_size, stride=patch_size),
+        #     Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1=patch_size, p2=patch_size)
+        # )
+
+        self.initialize_weights()
+
+    def initialize_weights(self):
+        # initialization
+        # initialize (and freeze) pos_embed by sin-cos embedding
+        pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.patch_embed.num_patches**.5), cls_token=True)
+        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+
+        decoder_pos_embed = get_2d_sincos_pos_embed(self.decoder_pos_embed.shape[-1], int(self.patch_embed.num_patches**.5), cls_token=True)
+        self.decoder_pos_embed.data.copy_(torch.from_numpy(decoder_pos_embed).float().unsqueeze(0))
+
+        # initialize patch_embed like nn.Linear (instead of nn.Conv2d)
+        w = self.patch_embed.proj.weight.data
+        torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+
+        # timm's trunc_normal_(std=.02) is effectively normal_(std=0.02) as cutoff is too big (2.)
+        torch.nn.init.normal_(self.cls_token, std=.02)
+        torch.nn.init.normal_(self.mask_token, std=.02)
+
+        # initialize nn.Linear and nn.LayerNorm
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            # we use xavier_uniform following official JAX ViT:
+            torch.nn.init.xavier_uniform_(m.weight)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+
+    def patchify(self, imgs):
+        """
+        imgs: (N, 3, H, W)
+        x: (N, L, patch_size**2 *3)
+        """
+        p = self.patch_embed.patch_size[0]
+        assert imgs.shape[2] == imgs.shape[3] and imgs.shape[2] % p == 0
+
+        h = w = imgs.shape[2] // p
+        x = imgs.reshape(shape=(imgs.shape[0], 3, h, p, w, p))
+        x = torch.einsum('nchpwq->nhwpqc', x)
+        x = x.reshape(shape=(imgs.shape[0], h * w, p**2 * 3))
+        return x
+
+    def unpatchify(self, x):
+        """
+        x: (N, L, patch_size**2 *3)
+        imgs: (N, 3, H, W)
+        """
+        p = self.patch_embed.patch_size[0]
+        h = w = int(x.shape[1]**.5)
+        assert h * w == x.shape[1]
+        
+        x = x.reshape(shape=(x.shape[0], h, w, p, p, 3))
+        x = torch.einsum('nhwpqc->nchpwq', x)
+        imgs = x.reshape(shape=(x.shape[0], 3, h * p, h * p))
+        return imgs
 
     def random_masking(self, x, mask_ratio):
             """
@@ -74,7 +136,7 @@ class MaskedAutoEncoder(nn.Module):
 
 
     def encoder(self, x, mask_ratio):
-        x = self.pos_embed(x)
+        x = self.patch_embed(x)
             
         B, _, _ = x.shape 
 
@@ -82,11 +144,6 @@ class MaskedAutoEncoder(nn.Module):
         x = x + self.pos_embed[:, 1:, :]
         # masking: length -> length * mask_ratio
         x, mask, ids_restore = self.random_masking(x, mask_ratio)
-            
-           
-        x = x + self.pos_embed
-
-        x, mask, restore_id = self.random_masking(x, mask_ratio)
             
         #cls tokenization: 
         cls_tokens = self.cls_token.expand(B, -1, -1) 
@@ -132,8 +189,12 @@ class MaskedAutoEncoder(nn.Module):
         mask: [N, L], 0 is keep, 1 is remove, 
         """
 
-        target = self.projection(imgs) 
-
+        target = self.patchify(imgs)
+        if self.norm_pix_loss:
+            mean = target.mean(dim=-1, keepdim=True)
+            var = target.var(dim=-1, keepdim=True)
+            target = (target - mean) / (var + 1.e-6)**.5
+        
         loss = (pred - target) ** 2 
         loss = loss.mean(dim=-1)
 
@@ -141,14 +202,18 @@ class MaskedAutoEncoder(nn.Module):
         return loss 
         
     def forward(self, imgs, mask_ratio=0.75):
-        x, mask, restore_ids = self.encoder(imgs, mask_ratio)
-        pred = self.decoder(x, restore_ids) 
+        x, mask, ids_restore= self.encoder(imgs, mask_ratio)
+        pred = self.decoder(x, ids_restore) 
         loss  = self.loss(imgs, pred, mask) 
         return loss, pred, mask
         
-# Test the MaskedAutoEncoder class for patch embedding
 if __name__ == "__main__":
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     x = torch.rand(1,3, 224, 224).to(device)
     model = MaskedAutoEncoder().to(device)
-    print(model(x)[1].shape)
+
+    loss, pred, mask = model(x)
+    print(f"Loss: {loss.item()}")
+    print(f"Prediction shape: {pred.shape}")
+    print(f"Mask shape: {mask.shape}")
+    
