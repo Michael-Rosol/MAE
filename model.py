@@ -4,9 +4,11 @@ import torch
 import torch.nn as nn
 import torchvision 
 from einops.layers.torch import Rearrange 
-
+import torchvision.transforms as transforms
 from timm.models.vision_transformer import PatchEmbed, Block
 from util.pos_embed import get_2d_sincos_pos_embed
+import matplotlib.pyplot as plt 
+import PIL.Image as Image
 
 class MaskedAutoEncoder(nn.Module):
     
@@ -113,13 +115,26 @@ class MaskedAutoEncoder(nn.Module):
             Per-sample shuffling is done by argsort random noise.
             x: [N, L, D], sequence
             """
-            B, L, D = x.shape  # batch, length, dim
+            B, L , D = x.shape  # batch, length, dim
             len_keep = int(L * (1 - mask_ratio))
         
-            noise = torch.rand(B, L, device=x.device)  # noise in [0, 1]
+            # Apply weighted centralization here: 
 
+            H = W = int(L**0.5) 
+
+            coordsi= torch.meshgrid(torch.arange(H), torch.arange(W))
+            coords = torch.stack(coordsi, dim=-1)
+            center = torch.tensor([H / 2, W / 2])
+            distances = torch.norm(coords - center, dim=-1)  # [H, W]
+            # Normalize distances to be in range [0, 1] and prioritize central region
+            distances = 1 - distances / distances.max()
+            distances = distances.flatten().to(x.device)  # [L]
+
+
+            noise = torch.rand(B, L, device=x.device)  # noise in [0, 1]
+            combined_noise = distances + (100 * noise)
             # sort noise for each sample, then ids_shuffle to keep original index
-            ids_shuffle = torch.argsort(noise, dim=1)  # ascend: small is keep, large is remove
+            ids_shuffle = torch.argsort(combined_noise, dim=1)  # ascend: small is keep, large is remove
             ids_restore = torch.argsort(ids_shuffle, dim=1)
 
             # keep the first subset
@@ -131,7 +146,16 @@ class MaskedAutoEncoder(nn.Module):
             mask[:, :len_keep] = 0
             # unshuffle to get the binary mask
             mask = torch.gather(mask, dim=1, index=ids_restore)
+            
+            # H = W = int(L**0.5)
+            # print(H)
+            # coords = torch.meshgrid(torch.arange(H), torch.arange(W))
+            # coords = torch.stack(coords, dim=1).float() 
+            #print(coords)
+            #print(distances)
 
+            
+            print(mask)           
             return x_masked, mask, ids_restore
 
 
@@ -208,12 +232,45 @@ class MaskedAutoEncoder(nn.Module):
         return loss, pred, mask
         
 if __name__ == "__main__":
+    # device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # x = torch.rand(1,3, 224, 224).to(device)
+    # model = MaskedAutoEncoder().to(device)
+
+    # loss, pred, mask = model(x)
+    # print(f"Loss: {loss.item()}")
+    # print(f"Prediction shape: {pred.shape}")
+    # print(f"Mask shape: {mask.shape}")
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    x = torch.rand(1,3, 224, 224).to(device)
+
+    # Load your image
+    img_path = './flow.jpeg'  # Replace with your image path
+    img = Image.open(img_path).convert('RGB')
+
+    # Preprocess the image to match model input
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),  # Resize to match model's expected input size
+        transforms.ToTensor(),           # Convert PIL image to PyTorch tensor
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # Normalize as per ImageNet
+    ])
+    img = transform(img).unsqueeze(0).to(device)  # Add batch dimension and move to device
+
+    # Initialize the model
     model = MaskedAutoEncoder().to(device)
 
-    loss, pred, mask = model(x)
+    # Evaluate the model
+    model.eval()
+    with torch.no_grad():
+        loss, pred, mask = model(img)
+
     print(f"Loss: {loss.item()}")
     print(f"Prediction shape: {pred.shape}")
     print(f"Mask shape: {mask.shape}")
+
+    img2 = plt.imread(img_path)
+
+    plt.imshow(img2)
+    plt.axis('off')  # Turn off axis labels
+    plt.title('Reconstructed Image')
+    plt.show() 
+    
     
