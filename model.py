@@ -232,7 +232,7 @@ if __name__ == "__main__":
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # Load your image
-    img_path = './flow.jpeg'  # Replace with your image path
+    img_path = './dogo.jpeg'  # Replace with your image path
    
     img = Image.open(img_path).convert('RGB')
 

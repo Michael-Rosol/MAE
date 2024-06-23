@@ -117,10 +117,10 @@ class MaskedAutoencoderViT(nn.Module):
         Per-sample shuffling is done by argsort random noise.
         x: [N, L, D], sequence
         """
-        N, L, D = x.shape  # batch, length, dim
+        B, L, D = x.shape  # batch, length, dim
         len_keep = int(L * (1 - mask_ratio))
         
-        noise = torch.rand(N, L, device=x.device)  # noise in [0, 1]
+        noise = torch.rand(B, L, device=x.device)  # noise in [0, 1]
         
         # sort noise for each sample
         ids_shuffle = torch.argsort(noise, dim=1)  # ascend: small is keep, large is remove
@@ -131,11 +131,10 @@ class MaskedAutoencoderViT(nn.Module):
         x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D))
 
         # generate the binary mask: 0 is keep, 1 is remove
-        mask = torch.ones([N, L], device=x.device)
+        mask = torch.ones([B, L], device=x.device)
         mask[:, :len_keep] = 0
         # unshuffle to get the binary mask
         mask = torch.gather(mask, dim=1, index=ids_restore)
-
         return x_masked, mask, ids_restore
 
     def forward_encoder(self, x, mask_ratio):
@@ -204,11 +203,19 @@ class MaskedAutoencoderViT(nn.Module):
         loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
         return loss
 
+    def denormalize(self, tensor):
+        tensor = tensor.clone()  # avoid modifying the original tensor
+        mean = torch.tensor([0.485, 0.456, 0.406]).to(tensor.device).view(1, -1, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225]).to(tensor.device).view(1, -1, 1, 1)
+        tensor = tensor * std + mean
+        return tensor
+
     def forward(self, imgs, mask_ratio=0.75):
         latent, mask, ids_restore = self.forward_encoder(imgs, mask_ratio)
         pred = self.forward_decoder(latent, ids_restore)  # [N, L, p*p*3]
         loss = self.forward_loss(imgs, pred, mask)
-        return loss, pred, mask
+        reconstructed = self.unpatchify(pred)
+        return loss, pred, mask, reconstructed
 
 
 def mae_vit_base_patch16_dec512d8b(**kwargs):
@@ -241,23 +248,17 @@ mae_vit_large_patch16 = mae_vit_large_patch16_dec512d8b  # decoder: 512 dim, 8 b
 mae_vit_huge_patch14 = mae_vit_huge_patch14_dec512d8b  # decoder: 512 dim, 8 blocks
 
 import torchvision.transforms.functional as TF
-
+import random
 if __name__ == "__main__":
 
-    # device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    # x = torch.rand(1,3, 224, 224).to(device)
-    # model = mae_vit_large_patch16_dec512d8b().to(device)
-
-    # loss, pred, mask = model(x)
-    # print(f"Loss: {loss.item()}")
-    # print(f"Prediction shape: {pred.shape}")
-    # print(f"Mask shape: {mask.shape}")
 
 # Define the device
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # Load your image
-    img_path = './pige.jpeg'  # Replace with your image path
+    img_path = './dogo.jpeg'  # Replace with your image path
+    
+    
     img = Image.open(img_path).convert('RGB')
 
     # Preprocess the image to match model input
@@ -274,18 +275,36 @@ if __name__ == "__main__":
     # Evaluate the model
     model.eval()
     with torch.no_grad():
-        loss, pred, mask = model(img)
+        loss, pred, mask, reconstructed = model(img)
 
     print(f"Loss: {loss.item()}")
     print(f"Prediction shape: {pred.shape}")
     print(f"Mask shape: {mask.shape}")
 
-img2 = plt.imread(img_path)
+        # Denormalize the reconstructed image
+   # Denormalize the reconstructed image
+reconstructed_img = model.denormalize(reconstructed)
 
-plt.imshow(img2)
+# Convert to numpy and plot
+reconstructed_img = reconstructed_img.squeeze(0).permute(1, 2, 0).cpu().numpy()
+
+# Plot original and reconstructed images
+plt.figure(figsize=(12, 6))
+
+# Load original image using PIL
+original_image = np.array(Image.open(img_path).convert('RGB'))
+
+# Plot original image
+plt.subplot(121)
+plt.imshow(original_image)
+plt.axis('off')  # Turn off axis labels
+plt.title('Original Image')
+
+# Plot reconstructed image
+plt.subplot(122)
+plt.imshow(reconstructed_img)
 plt.axis('off')  # Turn off axis labels
 plt.title('Reconstructed Image')
-plt.show() 
 
-
-
+plt.tight_layout()
+plt.show()

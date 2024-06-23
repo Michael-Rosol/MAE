@@ -133,7 +133,7 @@ class MaskedAutoencoderViT(nn.Module):
         mask[:, :len_keep] = 0
         # unshuffle to get the binary mask
         mask = torch.gather(mask, dim=1, index=ids_restore)
-
+        print(mask)
         return x_masked, mask, ids_restore
 
     def forward_encoder(self, x, mask_ratio):
@@ -209,28 +209,28 @@ class MaskedAutoencoderViT(nn.Module):
         return loss, pred, mask
 
 
-# def mae_vit_base_patch16_dec512d8b(**kwargs):
-#     model = MaskedAutoencoderViT(
-#         patch_size=16, embed_dim=768, depth=12, num_heads=12,
-#         decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
-#         mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-#     return model
+def mae_vit_base_patch16_dec512d8b(**kwargs):
+    model = MaskedAutoencoderViT(
+        patch_size=16, embed_dim=768, depth=12, num_heads=12,
+        decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
+        mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+    return model
 
 
-# def mae_vit_large_patch16_dec512d8b(**kwargs):
-#     model = MaskedAutoencoderViT(
-#         patch_size=16, embed_dim=1024, depth=24, num_heads=16,
-#         decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
-#         mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-#     return model
+def mae_vit_large_patch16_dec512d8b(**kwargs):
+    model = MaskedAutoencoderViT(
+        patch_size=16, embed_dim=1024, depth=24, num_heads=16,
+        decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
+        mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+    return model
 
 
-# def mae_vit_huge_patch14_dec512d8b(**kwargs):
-#     model = MaskedAutoencoderViT(
-#         patch_size=14, embed_dim=1280, depth=32, num_heads=16,
-#         decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
-#         mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-#     return model
+def mae_vit_huge_patch14_dec512d8b(**kwargs):
+    model = MaskedAutoencoderViT(
+        patch_size=14, embed_dim=1280, depth=32, num_heads=16,
+        decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
+        mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+    return model
 
 
 # # set recommended archs
@@ -238,28 +238,6 @@ class MaskedAutoencoderViT(nn.Module):
 # mae_vit_large_patch16 = mae_vit_large_patch16_dec512d8b  # decoder: 512 dim, 8 blocks
 # mae_vit_huge_patch14 = mae_vit_huge_patch14_dec512d8b  # decoder: 512 dim, 8 blocks
 
-# if __name__ == '__main__':
-#     # Choose the device
-#     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    
-    
-    
-#     # Create a dummy input (batch size: 1, channels: 3, height: 224, width: 224)
-#     x = torch.randn(1, 3, 224, 224).to(device)
-
-#     # Initialize the model (you can choose the base, large, or huge version)
-#     model = MaskedAutoencoderViT.to(device)
-    
-    
-#     # Forward pass through the model
-#     loss, pred, mask = model(x)
-    
-#     # Print the outputs
-#     print("Loss:", loss.item())
-#     print("Prediction shape:", pred.shape)
-#     print("Mask shape:", mask.shape)
-
-#     print(model(x).shape)
 
 if __name__ == "__main__":
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
