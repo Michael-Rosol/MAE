@@ -109,54 +109,48 @@ class MaskedAutoEncoder(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], 3, h * p, h * p))
         return imgs
 
-    def random_masking(self, x, mask_ratio):
+    def even_masking(self, x, mask_ratio):
             """
             Perform per-sample random masking by per-sample shuffling.
             Per-sample shuffling is done by argsort random noise.
             x: [N, L, D], sequence
             """
-            B, L , D = x.shape  # batch, length, dim
+            B, L, D = x.shape  # batch, length, dim
             len_keep = int(L * (1 - mask_ratio))
         
-            # Apply weighted centralization here: 
+            H = W = int(L**0.5)
 
-            H = W = int(L**0.5) 
+            central_start = L // 4
+            central_end = 3 * L // 4
 
-            coordsi= torch.meshgrid(torch.arange(H), torch.arange(W))
-            coords = torch.stack(coordsi, dim=-1)
-            center = torch.tensor([H / 2, W / 2])
-            distances = torch.norm(coords - center, dim=-1)  # [H, W]
-            # Normalize distances to be in range [0, 1] and prioritize central region
-            distances = 1 - distances / distances.max()
-            distances = distances.flatten().to(x.device)  # [L]
+            noise = torch.rand(B, L , device=x.device)  # noise in [0, 1]
+               
+            
 
-
-            noise = torch.rand(B, L, device=x.device)  # noise in [0, 1]
-            combined_noise = distances + (100 * noise)
-            # sort noise for each sample, then ids_shuffle to keep original index
-            ids_shuffle = torch.argsort(combined_noise, dim=1)  # ascend: small is keep, large is remove
+            # sort noise for each sample
+            ids_shuffle = torch.argsort(noise, dim=1)  # ascend: small is keep, large is remove
             ids_restore = torch.argsort(ids_shuffle, dim=1)
 
             # keep the first subset
-            ids_keep = ids_shuffle[:, :len_keep]
+            ids_keep = ids_shuffle[:, len_keep ]
             x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D))
 
             # generate the binary mask: 0 is keep, 1 is remove
-            mask = torch.ones([B, L], device=x.device)
-            mask[:, :len_keep] = 0
+            mask = torch.zeros([H, L] , device=x.device)
+            #mask[:, :len_keep] = 0
+            #mask[:,::4] = 1
+            mask[:, central_start:central_end] = 1
+            
+            
             # unshuffle to get the binary mask
             mask = torch.gather(mask, dim=1, index=ids_restore)
-            
-            # H = W = int(L**0.5)
-            # print(H)
-            # coords = torch.meshgrid(torch.arange(H), torch.arange(W))
-            # coords = torch.stack(coords, dim=1).float() 
-            #print(coords)
-            #print(distances)
 
-            
-            print(mask)           
+            print(mask.view(14,14))
+           
             return x_masked, mask, ids_restore
+
+ 
+
 
 
     def encoder(self, x, mask_ratio):
@@ -167,7 +161,7 @@ class MaskedAutoEncoder(nn.Module):
         # add pos embed w/o cls token
         x = x + self.pos_embed[:, 1:, :]
         # masking: length -> length * mask_ratio
-        x, mask, ids_restore = self.random_masking(x, mask_ratio)
+        x, mask, ids_restore = self.even_masking(x, mask_ratio)
             
         #cls tokenization: 
         cls_tokens = self.cls_token.expand(B, -1, -1) 
@@ -231,19 +225,15 @@ class MaskedAutoEncoder(nn.Module):
         loss  = self.loss(imgs, pred, mask) 
         return loss, pred, mask
         
-if __name__ == "__main__":
-    # device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    # x = torch.rand(1,3, 224, 224).to(device)
-    # model = MaskedAutoEncoder().to(device)
+import random 
 
-    # loss, pred, mask = model(x)
-    # print(f"Loss: {loss.item()}")
-    # print(f"Prediction shape: {pred.shape}")
-    # print(f"Mask shape: {mask.shape}")
+if __name__ == "__main__":
+
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # Load your image
     img_path = './flow.jpeg'  # Replace with your image path
+   
     img = Image.open(img_path).convert('RGB')
 
     # Preprocess the image to match model input
